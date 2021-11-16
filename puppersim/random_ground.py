@@ -31,7 +31,12 @@ class SimpleScene(scene_base.SceneBase):
     self._pybullet_client.changeDynamics(ground_id, -1, lateralFriction=1.0)
     self.add_object(ground_id, scene_base.ObjectType.GROUND)
     """
-    heightPerturbationRange = 0.06
+    filename = "random.txt"
+    f = open(filename, "r")
+    random_num = double(f.readline())
+    f.close()
+
+    heightPerturbationRange = random_num
     numHeightfieldRows = 256
     numHeightfieldColumns = 256
     heightfieldData = [0]*numHeightfieldRows*numHeightfieldColumns 

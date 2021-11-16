@@ -341,6 +341,10 @@ class ARSLearner(object):
         """ 
         Perform one update step of the policy weights.
         """
+        filename = "random.txt"
+        f.open(filename, "w")
+        f.write(str(random.random()) + "\n")
+        f.close()
         
         g_hat = self.aggregate_rollouts()                    
         print("Euclidean norm of update step:", np.linalg.norm(g_hat))
