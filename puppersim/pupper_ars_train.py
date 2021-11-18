@@ -18,6 +18,7 @@ import arspb.optimizers as optimizers
 from arspb.policies import *
 import socket
 from arspb.shared_noise import *
+import random
 
 ##############################
 #temp hack to create an envs_v2 pupper env
@@ -94,7 +95,7 @@ class Worker(object):
         return self.policy.get_weights_plus_stats()
     
 
-    def rollout(self, shift = 0., rollout_length = None):
+    def rollout(self, shift = 0., rollout_length = None, currentSimParameter = None):
         """ 
         Performs one rollout of maximum length rollout_length. 
         At each time-step it substracts shift from the reward.
@@ -105,7 +106,24 @@ class Worker(object):
 
         total_reward = 0.
         steps = 0
-
+        """
+            reward is calculated based off of the environment's reward function
+            this is currently proportional to speed - energy
+            we want the reward to be based off of whether the trajectory information
+            was useful for our encoder
+            directives:
+            - maintain a list of states visited in our trajectory
+            - after env.step, add the latest observation to our list
+            - then feed the list of observations to our encoder that 
+            predicts out what our simulation parameter is. 
+            - set the negative MSE loss between what the simulation parameter
+            is and our encoder's prediction to y_t 
+            - feed the list of observations minus the state just added
+            to our encoder that predicts out our simulation parameter is.
+            - set the negative MSE loss between what the simulation parameter
+            is and our encoder's prediction to y_t-1 
+            - report our reward as y_t - y_t-1 
+        """
         ob = self.env.reset()
         for i in range(rollout_length):
             action = self.policy.act(ob)
@@ -117,7 +135,7 @@ class Worker(object):
             
         return total_reward, steps
 
-    def do_rollouts(self, w_policy, num_rollouts = 1, shift = 1, evaluate = False):
+    def do_rollouts(self, w_policy, num_rollouts = 1, shift = 1, evaluate = False, currentSimParameter = None):
         """ 
         Generate multiple rollouts with a policy parametrized by w_policy.
         """
@@ -136,7 +154,7 @@ class Worker(object):
 
                 # for evaluation we do not shift the rewards (shift = 0) and we use the
                 # default rollout length (1000 for the MuJoCo locomotion tasks)
-                reward, r_steps = self.rollout(shift = 0., rollout_length = self.rollout_length)
+                reward, r_steps = self.rollout(shift = 0., rollout_length = self.rollout_length, currentSimParameter=currentSimParameter)
                 rollout_rewards.append(reward)
                 
             else:
@@ -150,11 +168,11 @@ class Worker(object):
 
                 # compute reward and number of timesteps used for positive perturbation rollout
                 self.policy.update_weights(w_policy + delta)
-                pos_reward, pos_steps  = self.rollout(shift = shift)
+                pos_reward, pos_steps  = self.rollout(shift = shift, currentSimParameter=currentSimParameter)
 
                 # compute reward and number of timesteps used for negative pertubation rollout
                 self.policy.update_weights(w_policy - delta)
-                neg_reward, neg_steps = self.rollout(shift = shift) 
+                neg_reward, neg_steps = self.rollout(shift = shift, currentSimParameter=currentSimParameter) 
                 steps += pos_steps + neg_steps
 
                 rollout_rewards.append([pos_reward, neg_reward])
@@ -255,7 +273,7 @@ class ARSLearner(object):
         self.optimizer = optimizers.SGD(self.w_policy, self.step_size)        
         print("Initialization of ARS complete.")
 
-    def aggregate_rollouts(self, num_rollouts = None, evaluate = False):
+    def aggregate_rollouts(self, num_rollouts = None, evaluate = False, currentSimParameter = None):
         """ 
         Aggregate update step from rollouts generated in parallel.
         """
@@ -275,12 +293,14 @@ class ARSLearner(object):
         rollout_ids_one = [worker.do_rollouts.remote(policy_id,
                                                  num_rollouts = num_rollouts,
                                                  shift = self.shift,
-                                                 evaluate=evaluate) for worker in self.workers]
+                                                 evaluate=evaluate,
+                                                 currentSimParameter=currentSimParameter) for worker in self.workers]
 
         rollout_ids_two = [worker.do_rollouts.remote(policy_id,
                                                  num_rollouts = 1,
                                                  shift = self.shift,
-                                                 evaluate=evaluate) for worker in self.workers[:(num_deltas % self.num_workers)]]
+                                                 evaluate=evaluate,
+                                                 currentSimParameter=currentSimParameter) for worker in self.workers[:(num_deltas % self.num_workers)]]
 
         # gather results 
         results_one = ray.get(rollout_ids_one)
@@ -342,11 +362,12 @@ class ARSLearner(object):
         Perform one update step of the policy weights.
         """
         filename = "random.txt"
-        f.open(filename, "w")
-        f.write(str(random.random()) + "\n")
+        f = open(filename, "w")
+        currentSimParameter = random.random() * 0.1
+        f.write(str(currentSimParameter) + "\n")
         f.close()
         
-        g_hat = self.aggregate_rollouts()                    
+        g_hat = self.aggregate_rollouts(currentSimParameter=currentSimParameter)                    
         print("Euclidean norm of update step:", np.linalg.norm(g_hat))
         self.w_policy -= self.optimizer._compute_step(g_hat).reshape(self.w_policy.shape)
         return

@@ -31,9 +31,9 @@ class SimpleScene(scene_base.SceneBase):
     self._pybullet_client.changeDynamics(ground_id, -1, lateralFriction=1.0)
     self.add_object(ground_id, scene_base.ObjectType.GROUND)
     """
-    filename = "random.txt"
+    filename = "/Users/ankushdhawan/Documents/Stanford/Sophomore Year/PupperProject/SimFinder_V5/puppersim/random.txt"
     f = open(filename, "r")
-    random_num = double(f.readline())
+    random_num = float(f.readline())
     f.close()
 
     heightPerturbationRange = random_num
