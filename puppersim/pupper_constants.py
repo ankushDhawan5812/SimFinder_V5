@@ -24,7 +24,7 @@ import collections
 import gin
 import numpy as np
 import puppersim.data as pd
-URDF_PATH = pd.getDataPath()+"/pupper_v2a.urdf" #or pupper_v2b with toes, but no visual meshes
+URDF_PATH = pd.getDataPath()+"/pupper_v2b.urdf" #or pupper_v2b with toes, but no visual meshes
 
 NUM_MOTORS = 12
 NUM_LEGS = 4

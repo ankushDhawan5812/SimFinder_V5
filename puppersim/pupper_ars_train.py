@@ -18,7 +18,9 @@ import arspb.optimizers as optimizers
 from arspb.policies import *
 import socket
 from arspb.shared_noise import *
+import arspb.env_utils as env_utils
 import random
+from encoder import TransformerEncoder
 
 ##############################
 #temp hack to create an envs_v2 pupper env
@@ -54,7 +56,8 @@ class Worker(object):
                  policy_params = None,
                  deltas=None,
                  rollout_length=1000,
-                 delta_std=0.01):
+                 delta_std=0.01, 
+                 encoder_params=None):
 
         # initialize OpenAI environment for each worker
         try:
@@ -85,6 +88,8 @@ class Worker(object):
             
         self.delta_std = delta_std
         self.rollout_length = rollout_length
+        self.encoder_yo = TransformerEncoder(self.env.observation_space.shape[0])
+        # self.encoder_yo.load_state_dict(encoder_params)
 
         
     def get_weights_plus_stats(self):
@@ -125,23 +130,54 @@ class Worker(object):
             - report our reward as y_t - y_t-1 
         """
         ob = self.env.reset()
+        #preprocess ob into a numpy array
+        ob_np = self.policy.observation_filter(ob, update=self.policy.update_filter)
+        if isinstance(ob_np, dict):
+            ob_np = env_utils.flatten_observations(ob_np)
+        ob_np = np.array(ob_np)
+        #done with preprocessing
+
+        #create a list of observations
+        history = []
+        history.append(ob_np)
+        prev_pred = self.encoder_yo(history)
+        prev_pred = prev_pred.squeeze(0).detach().numpy()[0]
+        #prev_pred is a float
+        total_reward = -1 * (prev_pred - currentSimParameter) ** 2 - shift
+        history_of_history = [(history[:], currentSimParameter)]
         for i in range(rollout_length):
             action = self.policy.act(ob)
             ob, reward, done, _ = self.env.step(action)
+
+            ob_np = self.policy.observation_filter(ob, update=self.policy.update_filter)
+            if isinstance(ob_np, dict):
+                ob_np = env_utils.flatten_observations(ob_np)
+            ob_np = np.array(ob_np)
+
+            history.append(ob_np)
+            history_of_history.append((history[:], currentSimParameter))
+            current_pred = self.encoder_yo(history)
+            current_pred = current_pred.squeeze(0).detach().numpy()[0][0]
+            current_distance = (current_pred - currentSimParameter) ** 2
+            prev_distance = (prev_pred - currentSimParameter) ** 2
+
+            reward = prev_distance - current_distance
+
+            prev_pred = current_pred
             steps += 1
             total_reward += (reward - shift)
             if done:
                 break
-            
-        return total_reward, steps
+        return total_reward, steps, history_of_history
 
-    def do_rollouts(self, w_policy, num_rollouts = 1, shift = 1, evaluate = False, currentSimParameter = None):
+    def do_rollouts(self, w_policy, num_rollouts = 1, shift = 1, evaluate = False, currentSimParameter = None, encoder_params = None):
         """ 
         Generate multiple rollouts with a policy parametrized by w_policy.
         """
 
         rollout_rewards, deltas_idx = [], []
         steps = 0
+        self.encoder_yo.load_state_dict(encoder_params)
 
         for i in range(num_rollouts):
 
@@ -154,7 +190,7 @@ class Worker(object):
 
                 # for evaluation we do not shift the rewards (shift = 0) and we use the
                 # default rollout length (1000 for the MuJoCo locomotion tasks)
-                reward, r_steps = self.rollout(shift = 0., rollout_length = self.rollout_length, currentSimParameter=currentSimParameter)
+                reward, r_steps, history_of_history = self.rollout(shift = 0., rollout_length = self.rollout_length, currentSimParameter=currentSimParameter)
                 rollout_rewards.append(reward)
                 
             else:
@@ -168,11 +204,11 @@ class Worker(object):
 
                 # compute reward and number of timesteps used for positive perturbation rollout
                 self.policy.update_weights(w_policy + delta)
-                pos_reward, pos_steps  = self.rollout(shift = shift, currentSimParameter=currentSimParameter)
+                pos_reward, pos_steps, history_of_history  = self.rollout(shift = shift, currentSimParameter=currentSimParameter)
 
                 # compute reward and number of timesteps used for negative pertubation rollout
                 self.policy.update_weights(w_policy - delta)
-                neg_reward, neg_steps = self.rollout(shift = shift, currentSimParameter=currentSimParameter) 
+                neg_reward, neg_steps, history_of_history = self.rollout(shift = shift, currentSimParameter=currentSimParameter) 
                 steps += pos_steps + neg_steps
 
                 rollout_rewards.append([pos_reward, neg_reward])
@@ -248,6 +284,7 @@ class ARSLearner(object):
 
         # initialize workers with different random seeds
         print('Initializing workers.') 
+        self.encoder_yoyo = TransformerEncoder(env.observation_space.shape[0])
         self.num_workers = num_workers
         self.workers = [Worker.remote(seed + 7 * i,
                                       env_name=env_name,
@@ -294,13 +331,15 @@ class ARSLearner(object):
                                                  num_rollouts = num_rollouts,
                                                  shift = self.shift,
                                                  evaluate=evaluate,
-                                                 currentSimParameter=currentSimParameter) for worker in self.workers]
+                                                 currentSimParameter=currentSimParameter, 
+                                                 encoder_params = self.encoder_yoyo.state_dict()) for worker in self.workers]
 
         rollout_ids_two = [worker.do_rollouts.remote(policy_id,
                                                  num_rollouts = 1,
                                                  shift = self.shift,
                                                  evaluate=evaluate,
-                                                 currentSimParameter=currentSimParameter) for worker in self.workers[:(num_deltas % self.num_workers)]]
+                                                 currentSimParameter=currentSimParameter,
+                                                 encoder_params = self.encoder_yoyo.state_dict()) for worker in self.workers[:(num_deltas % self.num_workers)]]
 
         # gather results 
         results_one = ray.get(rollout_ids_one)
@@ -387,8 +426,13 @@ class ARSLearner(object):
 
             # record statistics every 10 iterations
             if ((i + 1) % 10 == 0):
-                
-                rewards = self.aggregate_rollouts(num_rollouts = 100, evaluate = True)
+                filename = "random.txt"
+                f = open(filename, "w")
+                currentSimParameter = random.random() * 0.1
+                f.write(str(currentSimParameter) + "\n")
+                f.close()
+
+                rewards = self.aggregate_rollouts(num_rollouts = 100, evaluate = True, currentSimParameter = currentSimParameter)
                 w = ray.get(self.workers[0].get_weights_plus_stats.remote())
                 np.savez(self.logdir + "/lin_policy_plus_latest", w)
                 
