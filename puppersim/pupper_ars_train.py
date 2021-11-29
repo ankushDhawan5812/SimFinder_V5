@@ -21,6 +21,8 @@ from arspb.shared_noise import *
 import arspb.env_utils as env_utils
 import random
 from encoder import TransformerEncoder
+import torch
+from tqdm import tqdm
 
 ##############################
 #temp hack to create an envs_v2 pupper env
@@ -157,7 +159,7 @@ class Worker(object):
             history.append(ob_np)
             history_of_history.append((history[:], currentSimParameter))
             current_pred = self.encoder_yo(history)
-            current_pred = current_pred.squeeze(0).detach().numpy()[0][0]
+            current_pred = current_pred.squeeze(0).detach().numpy()[0]
             current_distance = (current_pred - currentSimParameter) ** 2
             prev_distance = (prev_pred - currentSimParameter) ** 2
 
@@ -175,7 +177,7 @@ class Worker(object):
         Generate multiple rollouts with a policy parametrized by w_policy.
         """
 
-        rollout_rewards, deltas_idx = [], []
+        rollout_rewards, deltas_idx, history_of_history = [], [], []
         steps = 0
         self.encoder_yo.load_state_dict(encoder_params)
 
@@ -208,12 +210,13 @@ class Worker(object):
 
                 # compute reward and number of timesteps used for negative pertubation rollout
                 self.policy.update_weights(w_policy - delta)
-                neg_reward, neg_steps, history_of_history = self.rollout(shift = shift, currentSimParameter=currentSimParameter) 
-                steps += pos_steps + neg_steps
+                neg_reward, neg_steps, history_of_history_1 = self.rollout(shift = shift, currentSimParameter=currentSimParameter) 
+                history_of_history += history_of_history_1
 
+                steps += pos_steps + neg_steps
                 rollout_rewards.append([pos_reward, neg_reward])
                             
-        return {'deltas_idx': deltas_idx, 'rollout_rewards': rollout_rewards, "steps" : steps}
+        return {'deltas_idx': deltas_idx, 'rollout_rewards': rollout_rewards, "steps" : steps, "history_of_history" : history_of_history}
     
     def stats_increment(self):
         self.policy.observation_filter.stats_increment()
@@ -285,6 +288,7 @@ class ARSLearner(object):
         # initialize workers with different random seeds
         print('Initializing workers.') 
         self.encoder_yoyo = TransformerEncoder(env.observation_space.shape[0])
+        self.encoder_optimizer = torch.optim.Adam(self.encoder_yoyo.parameters())
         self.num_workers = num_workers
         self.workers = [Worker.remote(seed + 7 * i,
                                       env_name=env_name,
@@ -345,19 +349,21 @@ class ARSLearner(object):
         results_one = ray.get(rollout_ids_one)
         results_two = ray.get(rollout_ids_two)
 
-        rollout_rewards, deltas_idx = [], [] 
+        rollout_rewards, deltas_idx, history = [], [], []
 
         for result in results_one:
             if not evaluate:
                 self.timesteps += result["steps"]
             deltas_idx += result['deltas_idx']
             rollout_rewards += result['rollout_rewards']
+            history += result['history_of_history']
 
         for result in results_two:
             if not evaluate:
                 self.timesteps += result["steps"]
             deltas_idx += result['deltas_idx']
             rollout_rewards += result['rollout_rewards']
+            history += result['history_of_history']
 
         deltas_idx = np.array(deltas_idx)
         rollout_rewards = np.array(rollout_rewards, dtype = np.float64)
@@ -393,7 +399,7 @@ class ARSLearner(object):
         g_hat /= deltas_idx.size
         t2 = time.time()
         print('time to aggregate rollouts', t2 - t1)
-        return g_hat
+        return g_hat, history
         
 
     def train_step(self):
@@ -406,26 +412,53 @@ class ARSLearner(object):
         f.write(str(currentSimParameter) + "\n")
         f.close()
         
-        g_hat = self.aggregate_rollouts(currentSimParameter=currentSimParameter)                    
+        g_hat, history = self.aggregate_rollouts(currentSimParameter=currentSimParameter)                    
         print("Euclidean norm of update step:", np.linalg.norm(g_hat))
         self.w_policy -= self.optimizer._compute_step(g_hat).reshape(self.w_policy.shape)
-        return
+        return history
 
     def train(self, num_iter):
 
         start = time.time()
         best_mean_rewards = -1e30
-        
+        history_buffer = []
+        num_encoder_training_steps = 10
         for i in range(num_iter):
             
             t1 = time.time()
-            self.train_step()
+            history = self.train_step()
+            history_buffer += history
+            # random.shuffle(history_buffer)
             t2 = time.time()
             print('total time of one step', t2 - t1)           
             print('iter ', i,' done')
 
+            if (((i + 1) % 3) == 0):
+                print('training encoder...')
+                total_loss = 0
+                target, pred = None, None
+                for step in tqdm(range(num_encoder_training_steps)):
+                    training_sample = random.sample(history_buffer, 32)
+                    self.encoder_optimizer.zero_grad()
+                    loss = []
+
+                    for sample in training_sample:
+                        trajectory, target = sample
+                        pred = self.encoder_yoyo(trajectory)
+                        pred = torch.squeeze(pred, 0)
+                        loss.append((pred - target) ** 2)
+                    loss = torch.stack(loss)
+                    loss = torch.sum(loss, 0)
+                    loss.backward()
+                    total_loss += loss.item()
+                    self.encoder_optimizer.step()
+                print('Sample simulation parameter: ', target)
+                print('Sample simulation prediction: ', pred.detach().numpy()[0])
+                print('Encoder training loss: ', total_loss / num_encoder_training_steps)
+
             # record statistics every 10 iterations
             if ((i + 1) % 10 == 0):
+                history = []
                 filename = "random.txt"
                 f = open(filename, "w")
                 currentSimParameter = random.random() * 0.1

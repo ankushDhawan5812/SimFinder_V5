@@ -14,7 +14,7 @@ class TransformerEncoder(torch.nn.Module):
         self.encoder_layer = nn.TransformerEncoderLayer(d_model=self.embed_dimension, nhead=self.num_attention_heads)
         self.transformer_encoder = nn.TransformerEncoder(self.encoder_layer, num_layers=self.num_hidden_layers)
         self.neural_net = nn.Sequential(*[nn.Linear(self.embed_dimension, self.hidden_size), nn.ReLU(), nn.Linear(self.hidden_size, 1)])
-
+        self.sigmoid = torch.nn.Sigmoid()
 
     def forward(self, x):
         #x is a list of numpy arrays
@@ -23,8 +23,10 @@ class TransformerEncoder(torch.nn.Module):
         x_transformed_even_more = torch.unsqueeze(x_transformed_more, 1)
         x_transformed_even_even_more = x_transformed_even_more.float()
         y = self.transformer_encoder(x_transformed_even_even_more)
-        z = torch.mean(y, dim=1)
-        return self.neural_net(z)
+        z = torch.mean(y, dim=0)
+        z = self.neural_net(z)
+
+        return self.sigmoid(z) * 0.1
 
 
 
