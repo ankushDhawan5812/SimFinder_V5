@@ -23,6 +23,8 @@ import random
 from encoder import TransformerEncoder
 import torch
 from tqdm import tqdm
+import arspb.trained_policies as tp
+import json
 
 ##############################
 #temp hack to create an envs_v2 pupper env
@@ -406,7 +408,7 @@ class ARSLearner(object):
         """ 
         Perform one update step of the policy weights.
         """
-        filename = "random.txt"
+        filename = "puppersim/random.txt"
         f = open(filename, "w")
         currentSimParameter = random.random() * 0.1
         f.write(str(currentSimParameter) + "\n")
@@ -507,8 +509,8 @@ class ARSLearner(object):
                         
         return 
 
-def run_ars(params):
-    dir_path = params['dir_path']
+def run_ars(params_, args):
+    dir_path = params_['dir_path']
     
     if not(os.path.exists(dir_path)):
         os.makedirs(dir_path)
@@ -524,54 +526,110 @@ def run_ars(params):
       import tds_environments
     except:
       pass
-    env = create_pupper_env()#gym.make(params['env_name'])
+
+
+    print('loading and building expert policy')
+    # if len(args.json_file)==0:
+    #   args.json_file = tp.getDataPath()+"/"+ args.envname+"/params.json"    
+    with open(args.json_file) as f:
+       params = json.load(f)
+    print("params=",params)
+    if len(args.expert_policy_file)==0:
+      args.expert_policy_file=tp.getDataPath()+"/"+args.envname+"/nn_policy_plus.npz" 
+      if not os.path.exists(args.expert_policy_file):
+        args.expert_policy_file=tp.getDataPath()+"/"+args.envname+"/lin_policy_plus.npz"
+    data = np.load(args.expert_policy_file, allow_pickle=True)
+
+    print('create gym environment:', params["env_name"])
+    # env = create_pupper_env(args)#gym.make(params["env_name"])
+    env = create_pupper_env()#gym.make(params["env_name"])
+
+    lst = data.files
+    weights = data[lst[0]][0]
+    mu = data[lst[0]][1]
+    print("mu=",mu)
+    std = data[lst[0]][2]
+    print("std=",std)
+        
     ob_dim = env.observation_space.shape[0]
     ac_dim = env.action_space.shape[0]
     ac_lb = env.action_space.low
     ac_ub = env.action_space.high
-
-    # set policy parameters. Possible filters: 'MeanStdFilter' for v2, 'NoFilter' for v1.
+    
+    policy_params={'type': params["policy_type"],
+                   'ob_filter':params['filter'],
+                   'ob_dim':ob_dim,
+                   'ac_dim':ac_dim,
+                   'action_lower_bound' : ac_lb,
+                   'action_upper_bound' : ac_ub,
+    }
+    policy_params['weights'] = weights
+    policy_params['observation_filter_mean'] = mu
+    policy_params['observation_filter_std'] = std
     if params["policy_type"]=="nn":
+      print("FullyConnectedNeuralNetworkPolicy")
       policy_sizes_string = params['policy_network_size_list'].split(',')
       print("policy_sizes_string=",policy_sizes_string)
       policy_sizes_list = [int(item) for item in policy_sizes_string]
       print("policy_sizes_list=",policy_sizes_list)
-      activation = params['activation']
-      policy_params={'type': params["policy_type"],
-                     'ob_filter':params['filter'],
-                     'policy_network_size' : policy_sizes_list,
-                     'ob_dim':ob_dim,
-                     'ac_dim':ac_dim,
-                     'activation' : activation,
-                     'action_lower_bound' : ac_lb,
-                     'action_upper_bound' : ac_ub,
-      }
+      policy_params['policy_network_size'] = policy_sizes_list
+      policy = FullyConnectedNeuralNetworkPolicy(policy_params, update_filter=False)
     else:
-      del params['policy_network_size_list']
-      del params['activation']
-      policy_params={'type': params["policy_type"],
-                     'ob_filter':params['filter'],
-                     'ob_dim':ob_dim,
-                     'ac_dim':ac_dim,
-                     'action_lower_bound' : ac_lb,
-                     'action_upper_bound' : ac_ub,
-      }
+      print("LinearPolicy2")
+      policy = LinearPolicy2(policy_params, update_filter=False)
+    policy.get_weights()
+
+
+
+
+    # env = create_pupper_env()#gym.make(params['env_name'])
+    # ob_dim = env.observation_space.shape[0]
+    # ac_dim = env.action_space.shape[0]
+    # ac_lb = env.action_space.low
+    # ac_ub = env.action_space.high
+
+    # # set policy parameters. Possible filters: 'MeanStdFilter' for v2, 'NoFilter' for v1.
+    # if params["policy_type"]=="nn":
+    #   policy_sizes_string = params['policy_network_size_list'].split(',')
+    #   print("policy_sizes_string=",policy_sizes_string)
+    #   policy_sizes_list = [int(item) for item in policy_sizes_string]
+    #   print("policy_sizes_list=",policy_sizes_list)
+    #   activation = params['activation']
+    #   policy_params={'type': params["policy_type"],
+    #                  'ob_filter':params['filter'],
+    #                  'policy_network_size' : policy_sizes_list,
+    #                  'ob_dim':ob_dim,
+    #                  'ac_dim':ac_dim,
+    #                  'activation' : activation,
+    #                  'action_lower_bound' : ac_lb,
+    #                  'action_upper_bound' : ac_ub,
+    #   }
+    # else:
+    #   del params['policy_network_size_list']
+    #   del params['activation']
+    #   policy_params={'type': params["policy_type"],
+    #                  'ob_filter':params['filter'],
+    #                  'ob_dim':ob_dim,
+    #                  'ac_dim':ac_dim,
+    #                  'action_lower_bound' : ac_lb,
+    #                  'action_upper_bound' : ac_ub,
+    #   }
     
     
-    ARS = ARSLearner(env_name=params['env_name'],
+    ARS = ARSLearner(env_name=params_['env_name'],
                      policy_params=policy_params,
-                     num_workers=params['n_workers'], 
-                     num_deltas=params['n_directions'],
-                     deltas_used=params['deltas_used'],
-                     step_size=params['step_size'],
-                     delta_std=params['delta_std'], 
+                     num_workers=params_['n_workers'], 
+                     num_deltas=params_['n_directions'],
+                     deltas_used=params_['deltas_used'],
+                     step_size=params_['step_size'],
+                     delta_std=params_['delta_std'], 
                      logdir=logdir,
-                     rollout_length=params['rollout_length'],
-                     shift=params['shift'],
+                     rollout_length=params_['rollout_length'],
+                     shift=params_['shift'],
                      params=params,
-                     seed = params['seed'])
-        
-    ARS.train(params['n_iter'])
+                     seed = params_['seed'])
+    
+    ARS.train(params_['n_iter'])
        
     return 
 
@@ -587,6 +645,8 @@ if __name__ == '__main__':
     parser.add_argument('--delta_std', '-std', type=float, default=.03)
     parser.add_argument('--n_workers', '-e', type=int, default=18)
     parser.add_argument('--rollout_length', '-r', type=int, default=150)
+    parser.add_argument('--expert_policy_file', type=str, default="")
+    parser.add_argument('--json_file', type=str, default="")
 
     # for Swimmer-v1 and HalfCheetah-v1 use shift = 0
     # for Hopper-v1, Walker2d-v1, and Ant-v1 use shift = 1
@@ -604,11 +664,10 @@ if __name__ == '__main__':
    
     args = parser.parse_args()
 
-
     print("redis_address=", args.redis_address)
     #ray.init(address=args.redis_address)
     ray.init()
- 
+
     params = vars(args)
-    run_ars(params)
+    run_ars(params, args)
 
