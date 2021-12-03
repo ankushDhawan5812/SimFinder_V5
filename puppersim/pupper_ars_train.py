@@ -26,6 +26,9 @@ from tqdm import tqdm
 import arspb.trained_policies as tp
 import json
 
+import matplotlib.pyplot as plt
+import pandas as pd
+
 ##############################
 #temp hack to create an envs_v2 pupper env
 
@@ -404,19 +407,20 @@ class ARSLearner(object):
         return g_hat, history
         
 
-    def train_step(self):
+    def train_step(self, current_train_step=-1, threshold=0):
         """ 
         Perform one update step of the policy weights.
         """
         filename = "puppersim/random.txt"
         f = open(filename, "w")
-        currentSimParameter = random.random() * 0.1
+        currentSimParameter = random.random() * 15
         f.write(str(currentSimParameter) + "\n")
         f.close()
         
         g_hat, history = self.aggregate_rollouts(currentSimParameter=currentSimParameter)                    
         print("Euclidean norm of update step:", np.linalg.norm(g_hat))
-        self.w_policy -= self.optimizer._compute_step(g_hat).reshape(self.w_policy.shape)
+        if current_train_step > threshold:
+            self.w_policy -= self.optimizer._compute_step(g_hat).reshape(self.w_policy.shape)
         return history
 
     def train(self, num_iter):
@@ -424,7 +428,9 @@ class ARSLearner(object):
         start = time.time()
         best_mean_rewards = -1e30
         history_buffer = []
-        num_encoder_training_steps = 10
+        num_encoder_training_steps = 40
+        losses_report = []
+        total_encoder_training_steps = 0
         for i in range(num_iter):
             
             t1 = time.time()
@@ -435,12 +441,12 @@ class ARSLearner(object):
             print('total time of one step', t2 - t1)           
             print('iter ', i,' done')
 
-            if (((i + 1) % 3) == 0):
+            if (((i + 1) % 100) == 0 and i > 500):
                 print('training encoder...')
                 total_loss = 0
                 target, pred = None, None
                 for step in tqdm(range(num_encoder_training_steps)):
-                    training_sample = random.sample(history_buffer, 32)
+                    training_sample = random.sample(history_buffer, 16)
                     self.encoder_optimizer.zero_grad()
                     loss = []
 
@@ -450,13 +456,22 @@ class ARSLearner(object):
                         pred = torch.squeeze(pred, 0)
                         loss.append((pred - target) ** 2)
                     loss = torch.stack(loss)
-                    loss = torch.sum(loss, 0)
+                    loss = torch.mean(loss, 0)
                     loss.backward()
                     total_loss += loss.item()
                     self.encoder_optimizer.step()
+                    losses_report.append(loss.item())
+
+
                 print('Sample simulation parameter: ', target)
                 print('Sample simulation prediction: ', pred.detach().numpy()[0])
-                print('Encoder training loss: ', total_loss / num_encoder_training_steps)
+                print('Encoder training loss: ', total_loss / (num_encoder_training_steps))
+                #losses_report += [total_loss / num_encoder_training_steps for ]
+                plt.figure(i)
+                plt.plot(np.linspace(0, len(losses_report), len(losses_report)), losses_report)
+                plt.savefig("visualize.png")
+                print('Distance: ', np.sqrt(total_loss / num_encoder_training_steps))
+                torch.save(self.encoder_yoyo.state_dict(), "encoder.pt")
 
             # record statistics every 10 iterations
             if ((i + 1) % 10 == 0):
@@ -466,6 +481,10 @@ class ARSLearner(object):
                 currentSimParameter = random.random() * 0.1
                 f.write(str(currentSimParameter) + "\n")
                 f.close()
+
+
+
+                
 
                 rewards = self.aggregate_rollouts(num_rollouts = 100, evaluate = True, currentSimParameter = currentSimParameter)
                 w = ray.get(self.workers[0].get_weights_plus_stats.remote())
@@ -615,7 +634,7 @@ def run_ars(params_, args):
     #                  'action_upper_bound' : ac_ub,
     #   }
     
-    
+    print('blah blah blah', params_['env_name'])
     ARS = ARSLearner(env_name=params_['env_name'],
                      policy_params=policy_params,
                      num_workers=params_['n_workers'], 
@@ -638,7 +657,7 @@ if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--env_name', type=str, default='InvertedPendulumSwingupBulletEnv-v0')
-    parser.add_argument('--n_iter', '-n', type=int, default=1000)
+    parser.add_argument('--n_iter', '-n', type=int, default=100000)
     parser.add_argument('--n_directions', '-nd', type=int, default=16)
     parser.add_argument('--deltas_used', '-du', type=int, default=16)
     parser.add_argument('--step_size', '-s', type=float, default=0.03)

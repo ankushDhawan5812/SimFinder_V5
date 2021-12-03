@@ -31,12 +31,15 @@ class SimpleScene(scene_base.SceneBase):
     self._pybullet_client.changeDynamics(ground_id, -1, lateralFriction=1.0)
     self.add_object(ground_id, scene_base.ObjectType.GROUND)
     """
+
+    """
     filename = "/Users/ankushdhawan/Documents/Stanford/Sophomore Year/PupperProject/SimFinder_V5/puppersim/random.txt"
     f = open(filename, "r")
     random_num = float(f.readline())
     f.close()
+    """
 
-    heightPerturbationRange = random_num
+    heightPerturbationRange = 0
     numHeightfieldRows = 256
     numHeightfieldColumns = 256
     heightfieldData = [0]*numHeightfieldRows*numHeightfieldColumns 
@@ -50,6 +53,7 @@ class SimpleScene(scene_base.SceneBase):
     
     terrainShape = self._pybullet_client.createCollisionShape(shapeType = self._pybullet_client.GEOM_HEIGHTFIELD, meshScale=[.05,.05,1], heightfieldTextureScaling=(numHeightfieldRows-1)/2, heightfieldData=heightfieldData, numHeightfieldRows=numHeightfieldRows, numHeightfieldColumns=numHeightfieldColumns)
     ground_id  = self._pybullet_client.createMultiBody(0, terrainShape)
+    self._pybullet_client.changeDynamics(ground_id, -1, lateralFriction=1)
     self.add_object(ground_id, scene_base.ObjectType.GROUND)
 
   @property

@@ -8,9 +8,9 @@ class TransformerEncoder(torch.nn.Module):
         super().__init__()
         self.training = False
         self.embed_dimension = state_embed_dimension
-        self.num_hidden_layers = 1
+        self.num_hidden_layers = 2
         self.num_attention_heads = 1
-        self.hidden_size = 1
+        self.hidden_size = 16
         self.encoder_layer = nn.TransformerEncoderLayer(d_model=self.embed_dimension, nhead=self.num_attention_heads)
         self.transformer_encoder = nn.TransformerEncoder(self.encoder_layer, num_layers=self.num_hidden_layers)
         self.neural_net = nn.Sequential(*[nn.Linear(self.embed_dimension, self.hidden_size), nn.ReLU(), nn.Linear(self.hidden_size, 1)])
@@ -26,7 +26,7 @@ class TransformerEncoder(torch.nn.Module):
         z = torch.mean(y, dim=0)
         z = self.neural_net(z)
 
-        return self.sigmoid(z) * 0.1
+        return self.sigmoid(z) * 15
 
 
 

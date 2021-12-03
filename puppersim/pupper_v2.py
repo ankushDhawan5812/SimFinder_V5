@@ -22,6 +22,7 @@ from puppersim import pupper_constants
 from pybullet_envs.minitaur.robots import quadruped_base
 from pybullet_envs.minitaur.robots import robot_urdf_loader
 from pybullet_envs.minitaur.robots import robot_config
+import matplotlib.pyplot as plt
 
 @gin.configurable
 class Pupper(quadruped_base.QuadrupedBase):
@@ -53,6 +54,11 @@ class Pupper(quadruped_base.QuadrupedBase):
           controlMode=self._pybullet_client.VELOCITY_CONTROL,
           targetVelocity=0,
           force=pupper_constants.JOINT_FRICTION_FORCE)
+    filename = "/Users/ankushdhawan/Documents/Stanford/Sophomore Year/PupperProject/SimFinder_V5/puppersim/random.txt"
+    f = open(filename, "r")
+    random_num = float(f.readline())
+    f.close()
+    self._pybullet_client.changeDynamics(self._urdf_loader.robot_id, -1, mass=random_num)
 
   def convert_leg_pose_to_motor_angles(leg_poses):
     """Convert swing-extend coordinate space to motor angles for a robot type.
